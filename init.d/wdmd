@@ -1,9 +1,9 @@
-#!/bin/sh
+#!/bin/bash
 #
 # wdmd - watchdog multiplexing daemon
 #
 # chkconfig: 2345 97 03
-# description: starts and stops sanlock daemon
+# description: starts and stops wdmd daemon
 #
 
 
@@ -22,7 +22,8 @@
 . /etc/rc.d/init.d/functions
 
 prog="wdmd"
-lockfile="/var/run/$prog/$prog.pid"
+runfile="/var/run/$prog/$prog.pid"
+lockfile="/var/lock/subsys/$prog"
 exec="/usr/sbin/$prog"
 
 WDMDGROUP="sanlock"
@@ -30,11 +31,37 @@ WDMDOPTS="-G $WDMDGROUP"
 
 [ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
 
+watchdog_probe() {
+	$exec --probe > /dev/null 2>&1
+	retval=$?
+	return $retval
+}
+
+watchdog_check() {
+	watchdog_probe
+	retval=$?
+
+	if [ $retval -ne 0 ]; then
+		echo -n $"Loading the softdog kernel module: "
+		modprobe softdog && udevadm settle
+
+		watchdog_probe
+		retval=$?
+		if [ $retval -ne 0 ]; then
+			failure; echo
+			return 1
+		fi
+		success; echo
+	fi
+}
+
 start() {
+	watchdog_check
+
 	[ -x $exec ] || exit 5
 
 	if [ ! -d /var/run/$prog ]; then
-		mkdir -p /var/run/$prog
+		install -d -g $WDMDGROUP -m 775 /var/run/$prog
 		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
 	fi
 
@@ -47,15 +74,36 @@ start() {
 }
 
 stop() {
-	echo -n $"Stopping $prog: "
-	killproc -p $lockfile $prog -TERM
+	PID=$(pidofproc -p $runfile $prog)
+
+	echo -n $"Sending stop signal $prog ($PID): "
+	killproc -p $runfile $prog -TERM
 	retval=$?
 	echo
-	[ $retval -eq 0 ] && rm -f $lockfile
+
+	if [ $retval -ne 0 ]; then
+		return $retval
+	fi
+
+	echo -n $"Waiting for $prog ($PID) to stop:"
+
+	timeout=10
+	while checkpid $PID; do
+		sleep 1
+		timeout=$((timeout - 1))
+		if [ "$timeout" -le 0 ]; then
+			failure; echo
+			return 1
+		fi
+	done
+
+	success; echo
+	rm -f $lockfile
+	return $retval
 }
 
 restart() {
-	stop
+	rh_status_q && stop
 	start
 }
 
@@ -102,4 +150,3 @@ case "$1" in
 		exit 2
 esac
 exit $?
-

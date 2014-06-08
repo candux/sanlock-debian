@@ -20,6 +20,9 @@
 #include <syslog.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <stdarg.h>
 
 #include "sanlock_internal.h"
@@ -117,6 +120,9 @@ void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, c
 	char name[NAME_ID_SIZE + 1];
 	int ret, pos = 0;
 	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
+	struct timeval cur_time;
+	struct tm time_info;
+	pid_t tid;
 
 	memset(name, 0, sizeof(name));
 
@@ -131,8 +137,16 @@ void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, c
 
 	pthread_mutex_lock(&log_mutex);
 
-	ret = snprintf(log_str + pos, len - pos, "%llu %s",
-		       (unsigned long long)monotime(), name);
+	gettimeofday(&cur_time, NULL);
+	localtime_r(&cur_time.tv_sec, &time_info);
+	ret = strftime(log_str + pos, len - pos,
+		       "%Y-%m-%d %H:%M:%S%z ", &time_info);
+	pos += ret;
+
+	tid = syscall(SYS_gettid);
+
+	ret = snprintf(log_str + pos, len - pos, "%llu [%u]: %s",
+		       (unsigned long long) monotime(), tid, name);
 	pos += ret;
 
 	va_start(ap, fmt);

@@ -29,6 +29,8 @@
 #include "delta_lease.h"
 #include "paxos_lease.h"
 #include "resource.h"
+#include "timeouts.h"
+#include "mode_block.h"
 
 uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
@@ -66,7 +68,7 @@ int paxos_lease_request_read(struct task *task, struct token *token,
 
 	rv = read_sectors(&token->disks[0], 1, 1, (char *)rr,
 			  sizeof(struct request_record),
-			  task, "request");
+			  task, token->io_timeout, "request");
 	if (rv < 0)
 		return rv;
 	return SANLK_OK;
@@ -79,35 +81,129 @@ int paxos_lease_request_write(struct task *task, struct token *token,
 
 	rv = write_sector(&token->disks[0], 1, (char *)rr,
 			  sizeof(struct request_record),
-			  task, "request");
+			  task, token->io_timeout, "request");
 	if (rv < 0)
 		return rv;
 	return SANLK_OK;
 }
 
 static int write_dblock(struct task *task,
+		        struct token *token,
+			struct sync_disk *disk,
+			uint64_t host_id,
+			struct paxos_dblock *pd);
+
+int paxos_erase_dblock(struct task *task,
+		       struct token *token,
+		       uint64_t host_id)
+{
+	struct paxos_dblock dblock;
+	int num_disks = token->r.num_disks;
+	int num_writes = 0;
+	int d, rv, error = -1;
+
+	memset(&dblock, 0, sizeof(dblock));
+
+	for (d = 0; d < num_disks; d++) {
+		rv = write_dblock(task, token, &token->disks[d], host_id, &dblock);
+		if (rv < 0) {
+			error = rv;
+			continue;
+		}
+		num_writes++;
+	}
+
+	if (!majority_disks(num_disks, num_writes))
+		return error;
+	return SANLK_OK;
+}
+
+/*
+ * Write a combined dblock and mblock.  This is an odd case that doesn't fit
+ * well with the way the code has been written.  It's used when we want to
+ * convert sh to ex, which requires acquiring the lease owner, but we don't
+ * want to clobber our SHARED mblock by writing a plain dblock in the process
+ * in case there's a problem with the acquiring, we don't want to loose our
+ * shared mode lease.
+ *
+ * NB. this assumes the only mblock flag we want is MBLOCK_SHARED and that
+ * the generation we want is token->host_generation.  This is currently
+ * the case, but could change in the future.
+ */
+
+static int write_dblock_mblock_sh(struct task *task,
+			          struct token *token,
+			          struct sync_disk *disk,
+			          uint64_t host_id,
+			          struct paxos_dblock *pd)
+{
+	struct mode_block *mb;
+	char *iobuf, **p_iobuf;
+	uint64_t offset;
+	int iobuf_len, rv;
+
+	iobuf_len = disk->sector_size;
+	if (!iobuf_len)
+		return -EINVAL;
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return -ENOMEM;
+
+	offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
+
+	memcpy(iobuf, (char *)pd, sizeof(struct paxos_dblock));
+
+	mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
+	mb->flags = MBLOCK_SHARED;
+	mb->generation = token->host_generation;
+
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+
+	if (rv < 0) {
+		log_errot(token, "write_dblock_mblock_sh host_id %llu gen %llu rv %d",
+			  (unsigned long long)host_id,
+			  (unsigned long long)token->host_generation,
+			  rv);
+	}
+
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
+	return rv;
+}
+
+static int write_dblock(struct task *task,
+		        struct token *token,
 			struct sync_disk *disk,
 			uint64_t host_id,
 			struct paxos_dblock *pd)
 {
 	int rv;
 
+	if (token->flags & T_WRITE_DBLOCK_MBLOCK_SH) {
+		/* special case to preserve our SH mode block within the dblock */
+		return write_dblock_mblock_sh(task, token, disk, host_id, pd);
+	}
+
 	/* 1 leader block + 1 request block;
 	   host_id N is block offset N-1 */
 
 	rv = write_sector(disk, 2 + host_id - 1, (char *)pd, sizeof(struct paxos_dblock),
-			  task, "dblock");
+			  task, token->io_timeout, "dblock");
 	return rv;
 }
 
 static int write_leader(struct task *task,
+		        struct token *token,
 			struct sync_disk *disk,
 			struct leader_record *lr)
 {
 	int rv;
 
 	rv = write_sector(disk, 0, (char *)lr, sizeof(struct leader_record),
-			  task, "leader");
+			  task, token->io_timeout, "leader");
 	return rv;
 }
 
@@ -167,6 +263,7 @@ static int read_dblocks(struct task *task,
 #endif
 
 static int read_leader(struct task *task,
+		       struct token *token,
 		       struct sync_disk *disk,
 		       struct leader_record *lr)
 {
@@ -175,7 +272,7 @@ static int read_leader(struct task *task,
 	/* 0 = leader record is first sector */
 
 	rv = read_sectors(disk, 0, 1, (char *)lr, sizeof(struct leader_record),
-			  task, "leader");
+			  task, token->io_timeout, "leader");
 
 	return rv;
 }
@@ -265,7 +362,8 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	int sector_size = token->disks[0].sector_size;
 	int sector_count;
 	int iobuf_len;
-	int d, q, rv;
+	int phase2 = 0;
+	int d, q, rv = 0;
 	int q_max = -1;
 	int error;
 
@@ -310,7 +408,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(task, &token->disks[d], token->host_id, &dblock);
+		rv = write_dblock(task, token, &token->disks[d], token->host_id, &dblock);
 		if (rv < 0)
 			continue;
 		num_writes++;
@@ -332,7 +430,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		memset(iobuf[d], 0, iobuf_len);
 
-		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task);
+		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout);
 		if (rv == SANLK_AIO_TIMEOUT)
 			iobuf[d] = NULL;
 		if (rv < 0)
@@ -347,7 +445,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			if (rv < 0)
 				continue;
 
-			check_mode_block(token, q, (char *)bk);
+			check_mode_block(token, next_lver, q, (char *)bk);
 
 			if (bk->lver < dblock.lver)
 				continue;
@@ -447,6 +545,8 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	 * Same description as phase 1, same sequence of writes/reads.
 	 */
 
+	phase2 = 1;
+
 	log_token(token, "ballot %llu phase2 bal %llu inp %llu %llu %llu q_max %d",
 		  (unsigned long long)dblock.lver,
 		  (unsigned long long)dblock.bal,
@@ -458,7 +558,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(task, &token->disks[d], token->host_id, &dblock);
+		rv = write_dblock(task, token, &token->disks[d], token->host_id, &dblock);
 		if (rv < 0)
 			continue;
 		num_writes++;
@@ -480,7 +580,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		memset(iobuf[d], 0, iobuf_len);
 
-		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task);
+		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout);
 		if (rv == SANLK_AIO_TIMEOUT)
 			iobuf[d] = NULL;
 		if (rv < 0)
@@ -557,6 +657,22 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		free(iobuf[d]);
 	}
+
+	if (phase2 && (error < 0) &&
+	    ((error == SANLK_DBLOCK_READ) || (error == SANLK_DBLOCK_WRITE))) {
+		/*
+		 * After phase2 we might "win" the ballot even if we don't complete it
+		 * because another host could could pick and commit our dblock values.
+		 * If we abort the acquire, but are granted the lease, this would leave
+		 * us owning the lease on disk.  With this flag, the release path will
+		 * try to ensure we are not and do not become the lease owner.
+		 */
+		token->flags |= T_RETRACT_PAXOS;
+
+		log_errot(token, "ballot %llu retract error %d",
+			  (unsigned long long)next_lver, error);
+	}
+
 	return error;
 }
 
@@ -674,11 +790,19 @@ static int verify_leader(struct token *token,
 
 	rv = read_sectors(disk, 0, 1, (char *)&leader_rr,
 			  sizeof(struct leader_record),
-			  NULL, "paxos_verify");
+			  NULL, 1, "paxos_verify");
 
 	log_leader_error(rv, token, disk, &leader_rr, "paxos_verify");
 
 	return result;
+}
+
+int paxos_verify_leader(struct token *token,
+			 struct sync_disk *disk,
+			 struct leader_record *lr,
+			 const char *caller)
+{
+	return verify_leader(token, disk, lr, caller);
 }
 
 static int leaders_match(struct leader_record *a, struct leader_record *b)
@@ -686,6 +810,65 @@ static int leaders_match(struct leader_record *a, struct leader_record *b)
 	if (!memcmp(a, b, LEADER_COMPARE_LEN))
 		return 1;
 	return 0;
+}
+
+/* read the lockspace name and resource name given the disk location */
+
+int paxos_read_resource(struct task *task,
+			struct token *token,
+			struct sanlk_resource *res)
+{
+	struct leader_record leader;
+	int rv;
+
+	memset(&leader, 0, sizeof(struct leader_record));
+
+	rv = read_leader(task, token, &token->disks[0], &leader);
+	if (rv < 0)
+		return rv;
+
+	if (!res->lockspace_name[0])
+		memcpy(token->r.lockspace_name, leader.space_name, NAME_ID_SIZE);
+
+	if (!res->name[0])
+		memcpy(token->r.name, leader.resource_name, NAME_ID_SIZE);
+
+	rv = verify_leader(token, &token->disks[0], &leader, "read_resource");
+
+	if (rv == SANLK_OK) {
+		memcpy(res->lockspace_name, leader.space_name, NAME_ID_SIZE);
+		memcpy(res->name, leader.resource_name, NAME_ID_SIZE);
+		res->lver = leader.lver;
+	}
+
+	return rv;
+}
+
+int paxos_read_buf(struct task *task,
+		   struct token *token,
+		   char **buf_out)
+{
+	char *iobuf, **p_iobuf;
+	struct sync_disk *disk = &token->disks[0];
+	int rv, iobuf_len;
+
+	iobuf_len = direct_align(disk);
+	if (iobuf_len < 0)
+		return iobuf_len;
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return rv;
+
+	memset(iobuf, 0, iobuf_len);
+
+	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout);
+
+	*buf_out = iobuf;
+
+	return rv;
 }
 
 static int _leader_read_one(struct task *task,
@@ -698,7 +881,7 @@ static int _leader_read_one(struct task *task,
 
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = read_leader(task, &token->disks[0], &leader);
+	rv = read_leader(task, token, &token->disks[0], &leader);
 	if (rv < 0)
 		return rv;
 
@@ -751,7 +934,7 @@ static int _leader_read_num(struct task *task,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_leader(task, &token->disks[d], &leaders[d]);
+		rv = read_leader(task, token, &token->disks[d], &leaders[d]);
 		if (rv < 0)
 			continue;
 
@@ -862,7 +1045,7 @@ static int _lease_read_one(struct task *task,
 
 	memset(iobuf, 0, iobuf_len);
 
-	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task);
+	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout);
 	if (rv < 0)
 		goto out;
 
@@ -913,7 +1096,7 @@ static int _lease_read_num(struct task *task,
 	int *leader_reps;
 	int num_disks = token->r.num_disks;
 	int leaders_len, leader_reps_len;
-	int i, d, rv, found, num_reads, q_one, tmp_q = -1;
+	int i, d, rv = 0, found, num_reads, q_one, tmp_q = -1;
 
 	leaders_len = num_disks * sizeof(struct leader_record);
 	leader_reps_len = num_disks * sizeof(int);
@@ -1044,26 +1227,33 @@ static int write_new_leader(struct task *task,
 {
 	int num_disks = token->r.num_disks;
 	int num_writes = 0;
-	int error = SANLK_OK;
-	int rv = 0, d;
+	int timeout = 0;
+	int rv = 0;
+	int d;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_leader(task, &token->disks[d], nl);
-		if (rv < 0)
+		rv = write_leader(task, token, &token->disks[d], nl);
+		if (rv == SANLK_AIO_TIMEOUT)
+			timeout = 1;
+		if (rv < 0) 
 			continue;
 		num_writes++;
 	}
 
 	if (!majority_disks(num_disks, num_writes)) {
-		log_errot(token, "%s write_new_leader error %d owner %llu %llu %llu",
-			  caller, rv,
+		log_errot(token, "%s write_new_leader error %d timeout %d owner %llu %llu %llu",
+			  caller, rv, timeout,
 			  (unsigned long long)nl->owner_id,
 			  (unsigned long long)nl->owner_generation,
 			  (unsigned long long)nl->timestamp);
-		error = SANLK_LEADER_WRITE;
+		if (timeout)
+			return SANLK_AIO_TIMEOUT;
+		if (rv < 0)
+			return rv;
+		return SANLK_LEADER_WRITE;
 	}
 
-	return error;
+	return SANLK_OK;
 }
 
 /*
@@ -1094,6 +1284,33 @@ static int write_new_leader(struct task *task,
  * 				6 i/os = 3 1MB reads, 3 512 byte writes
  */
 
+/*
+ * When a lease is held by host A, and host B attempts to acquire it,
+ * host B will sometimes fail quickly (within a second) with IDLIVE/-243,
+ * but other times will fail slowly (several seconds) with IDLIVE/-243.
+ * This comes from the fact that this function (on B) is looking for a change
+ * in A's delta timestamp.  To detect a timestamp change, we compare the
+ * last timestamp from A that was seen by our own renewal thread, against
+ * the delta timestamp from A that we read here directly.
+ *
+ * time X: our own delta renewal thread reads A's delta timestamp as 100
+ * time Y: host A renews its delta lease, writing timestamp 120
+ * time Z: our own delta renewal thread reads A's delta timestamp as 120
+ *
+ * If we try to acquire a resource lease held by A between time X and Y,
+ * paxos_lease_acquire() will read A's timestamp as 100, the same as our
+ * own renewal thread last saw.  paxos_lease_acquire() will reread A's
+ * delta lease once a second until it changes at time Y, at which point
+ * it will return IDLIVE.  If Y is very shortly before Z, then
+ * paxos_lease_acquire() can take up to 20 seconds to return IDLIVE.
+ *
+ * If we try to acquire a resource lease held by A between time Y and Z,
+ * paxos_lease_acquire() will read A's timestamp as 120, which is newer
+ * than our own renewal thread last saw.  paxos_lease_acquire() will
+ * fail immediately returning IDLIVE.  If Y is very shortly after X,
+ * then paxos_lease_acquire() will return IDLIVE quickly most of the time.
+ */
+
 int paxos_lease_acquire(struct task *task,
 			struct token *token,
 			uint32_t flags,
@@ -1117,9 +1334,11 @@ int paxos_lease_acquire(struct task *task,
 	int copy_cur_leader = 0;
 	int disk_open = 0;
 	int error, rv, us;
+	int other_io_timeout, other_host_dead_seconds;
 
 	log_token(token, "paxos_acquire begin %x %llu %d",
 		  flags, (unsigned long long)acquire_lver, new_num_hosts);
+
  restart:
 
 	error = paxos_lease_read(task, token, &cur_leader, &max_mbal, "paxos_acquire");
@@ -1151,6 +1370,22 @@ int paxos_lease_acquire(struct task *task,
 		log_token(token, "paxos_acquire already owner id %llu gen %llu",
 			  (unsigned long long)token->host_id,
 			  (unsigned long long)token->host_generation);
+		copy_cur_leader = 1;
+		goto run;
+	}
+
+	/*
+	 * We were the last host to hold this lease, but in a previous
+	 * lockspace generation in which we didn't cleanly release the
+	 * paxos lease.
+	 */
+
+	if (cur_leader.owner_id == token->host_id &&
+	    cur_leader.owner_generation < token->host_generation) {
+		log_token(token, "paxos_acquire past owner id %llu gen %llu %llu",
+			  (unsigned long long)token->host_id,
+			  (unsigned long long)token->host_generation,
+			  (unsigned long long)cur_leader.owner_generation);
 		copy_cur_leader = 1;
 		goto run;
 	}
@@ -1204,7 +1439,7 @@ int paxos_lease_acquire(struct task *task,
 		  (unsigned long long)wait_start);
 
 	while (1) {
-		error = delta_lease_leader_read(task, &host_id_disk,
+		error = delta_lease_leader_read(task, token->io_timeout, &host_id_disk,
 						cur_leader.space_name,
 						cur_leader.owner_id,
 						&host_id_leader,
@@ -1288,7 +1523,10 @@ int paxos_lease_acquire(struct task *task,
 
 		now = monotime();
 
-		if (now - wait_start > task->host_dead_seconds) {
+		other_io_timeout = hs.io_timeout;
+		other_host_dead_seconds = calc_host_dead_seconds(other_io_timeout);
+
+		if (now - wait_start > other_host_dead_seconds) {
 			log_token(token, "paxos_acquire owner %llu %llu %llu "
 				  "delta %llu %llu %llu dead %llu-%llu>%d",
 				  (unsigned long long)cur_leader.owner_id,
@@ -1299,7 +1537,7 @@ int paxos_lease_acquire(struct task *task,
 				  (unsigned long long)host_id_leader.timestamp,
 				  (unsigned long long)now,
 				  (unsigned long long)wait_start,
-				  task->host_dead_seconds);
+				  other_host_dead_seconds);
 			goto run;
 		}
 
@@ -1478,11 +1716,20 @@ int paxos_lease_acquire(struct task *task,
 	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(task, token, &new_leader, "paxos_acquire");
-	if (error < 0)
+	if (error < 0) {
+		/* See comment in run_ballot about this flag. */
+		token->flags |= T_RETRACT_PAXOS;
+		memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
 		goto out;
+	}
 
 	if (new_leader.owner_id != token->host_id) {
 		/* not a problem, but interesting to see, so use log_error */
+
+		/* It's possible that we commit an outdated owner id/gen here.
+		   If we go back to the top and retry, we may find that the
+		   owner host_id is alive but with a newer generation, and
+		   we'd be able to get the lease by running the ballot again. */
 
 		log_errot(token, "ballot %llu commit other owner %llu %llu %llu",
 			  (unsigned long long)new_leader.lver,
@@ -1524,7 +1771,7 @@ int paxos_lease_renew(struct task *task,
 	for (d = 0; d < token->r.num_disks; d++) {
 		memset(&new_leader, 0, sizeof(struct leader_record));
 
-		rv = read_leader(task, &token->disks[d], &new_leader);
+		rv = read_leader(task, token, &token->disks[d], &new_leader);
 		if (rv < 0)
 			continue;
 
@@ -1550,10 +1797,12 @@ int paxos_lease_renew(struct task *task,
 
 int paxos_lease_release(struct task *task,
 			struct token *token,
+			struct sanlk_resource *resrename,
 		        struct leader_record *leader_last,
 		        struct leader_record *leader_ret)
 {
 	struct leader_record leader;
+	struct leader_record *last;
 	int error;
 
 	error = paxos_lease_leader_read(task, token, &leader, "paxos_release");
@@ -1562,24 +1811,42 @@ int paxos_lease_release(struct task *task,
 		goto out;
 	}
 
-	if (leader.lver != leader_last->lver) {
+	/*
+	 * Used when the caller does not know who the owner is, but
+	 * wants to ensure it is not the owner.
+	 */
+	if (!leader_last)
+		last = &leader;
+	else
+		last = leader_last;
+
+	if (leader.lver != last->lver) {
 		log_errot(token, "paxos_release %llu other lver %llu",
-			  (unsigned long long)leader_last->lver,
+			  (unsigned long long)last->lver,
 			  (unsigned long long)leader.lver);
 		return SANLK_RELEASE_LVER;
 	}
 
-	if (leader.owner_id != token->host_id ||
-	    leader.owner_generation != token->host_generation) {
-		log_errot(token, "paxos_release %llu other owner %llu %llu %llu",
-			  (unsigned long long)leader_last->lver,
+	if (leader.timestamp == LEASE_FREE) {
+		log_errot(token, "paxos_release %llu already free %llu %llu %llu",
+			  (unsigned long long)last->lver,
 			  (unsigned long long)leader.owner_id,
 			  (unsigned long long)leader.owner_generation,
 			  (unsigned long long)leader.timestamp);
 		return SANLK_RELEASE_OWNER;
 	}
 
-	if (memcmp(&leader, leader_last, sizeof(struct leader_record))) {
+	if (leader.owner_id != token->host_id ||
+	    leader.owner_generation != token->host_generation) {
+		log_errot(token, "paxos_release %llu other owner %llu %llu %llu",
+			  (unsigned long long)last->lver,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp);
+		return SANLK_RELEASE_OWNER;
+	}
+
+	if (memcmp(&leader, last, sizeof(struct leader_record))) {
 		/*
 		 * This will happen when two hosts finish the same ballot
 		 * successfully, the second commiting the same inp values
@@ -1593,18 +1860,21 @@ int paxos_lease_release(struct task *task,
 		 */
 		log_errot(token, "paxos_release %llu leader different "
 			  "write %llu %llu %llu vs %llu %llu %llu",
-			  (unsigned long long)leader_last->lver,
-			  (unsigned long long)leader_last->write_id,
-			  (unsigned long long)leader_last->write_generation,
-			  (unsigned long long)leader_last->write_timestamp,
+			  (unsigned long long)last->lver,
+			  (unsigned long long)last->write_id,
+			  (unsigned long long)last->write_generation,
+			  (unsigned long long)last->write_timestamp,
 			  (unsigned long long)leader.write_id,
 			  (unsigned long long)leader.write_generation,
 			  (unsigned long long)leader.write_timestamp);
 		/*
-		log_leader_error(0, token, &token->disks[0], leader_last, "paxos_release");
+		log_leader_error(0, token, &token->disks[0], last, "paxos_release");
 		log_leader_error(0, token, &token->disks[0], &leader, "paxos_release");
 		*/
 	}
+
+	if (resrename)
+		memcpy(leader.resource_name, resrename->name, NAME_ID_SIZE);
 
 	leader.timestamp = LEASE_FREE;
 	leader.write_id = token->host_id;
@@ -1639,6 +1909,15 @@ int paxos_lease_init(struct task *task,
 		num_hosts = DEFAULT_MAX_HOSTS;
 	if (!max_hosts)
 		max_hosts = DEFAULT_MAX_HOSTS;
+
+	if (max_hosts > DEFAULT_MAX_HOSTS)
+		return -E2BIG;
+
+	if (num_hosts > DEFAULT_MAX_HOSTS)
+		return -EINVAL;
+
+	if (num_hosts > max_hosts)
+		return -EINVAL;
 
 	sector_size = token->disks[0].sector_size;
 
@@ -1676,7 +1955,7 @@ int paxos_lease_init(struct task *task,
 
 	for (d = 0; d < token->r.num_disks; d++) {
 		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,
-				 iobuf, iobuf_len, task);
+				 iobuf, iobuf_len, task, token->io_timeout);
 
 		if (rv == SANLK_AIO_TIMEOUT)
 			aio_timeout = 1;

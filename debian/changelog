@@ -1,3 +1,12 @@
+sanlock (3.1.0-1) unstable; urgency=low
+
+  * New upstream release (Closes: #695859) which includes:
+    - sanlock crash (Closes: #716262)
+  * Introduce sanlock-python package
+  * correct category (Thanks to Michał Pena)
+
+ -- David Weber <wb@munzinger.de>  Wed, 04 Jun 2014 19:30:27 +0200
+
 sanlock (2.2-2) unstable; urgency=low
 
   * Fix CVE-2012-5638 sanlock world writable /var/log/sanlock.log.

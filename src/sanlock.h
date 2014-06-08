@@ -10,7 +10,8 @@
 #ifndef __SANLOCK_H__
 #define __SANLOCK_H__
 
-/* pid can own this many resources at once */
+/* an acquire or release call can specify this many explicit
+   resources in a single call. */
 
 #define SANLK_MAX_RESOURCES	8
 
@@ -18,9 +19,15 @@
 
 #define SANLK_NAME_LEN		48   
 
-/* max disk path length, includes terminating \0 byte */
+/* max disk path length, includes terminating \0 byte, and escape chars,
+   i.e. the strlen with esc chars inserted must still be less than 1024. */
 
 #define SANLK_PATH_LEN		1024
+
+/* max length of kill script path and args, includes terminate \0 byte */
+
+#define SANLK_HELPER_PATH_LEN	128
+#define SANLK_HELPER_ARGS_LEN	128
 
 /* max disks in a single lease */
 
@@ -86,5 +93,15 @@ struct sanlk_lockspace {
 	struct sanlk_disk host_id_disk;
 };
 
-#endif
+struct sanlk_host {
+	uint64_t host_id;
+	uint64_t generation;
+	uint64_t timestamp;
+	uint32_t io_timeout;
+	uint32_t flags;
+};
 
+size_t sanlock_path_export(char *dst, const char *src, size_t dstlen);
+size_t sanlock_path_import(char *dst, const char *src, size_t dstlen);
+
+#endif

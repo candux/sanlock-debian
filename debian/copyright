@@ -56,7 +56,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License with
 the Debian GNU/Linux distribution in file /usr/share/common-licenses/GPL-2;
-if not, write to the Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, 
+if not, write to the Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
 Boston, MA 02110-1301, USA.
 
 On Debian systems, the complete text of the GNU General Public
@@ -68,7 +68,7 @@ src/crc32c.c (copied from btrfs-progs which copied from linux kernel)
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the Free
-Software Foundation; either version 2 of the License, or (at your option) 
+Software Foundation; either version 2 of the License, or (at your option)
 any later version.
 
 This program is distributed in the hope that it will be useful,
@@ -78,7 +78,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License with
 the Debian GNU/Linux distribution in file /usr/share/common-licenses/GPL-2;
-if not, write to the Free Software Foundation, Inc., 51 Franklin St, Fifth Floor, 
+if not, write to the Free Software Foundation, Inc., 51 Franklin St, Fifth Floor,
 Boston, MA 02110-1301, USA.
 
 On Debian systems, the complete text of the GNU General Public

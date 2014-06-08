@@ -21,7 +21,7 @@ LIB_SOURCE = client.c wdmd_sock.c
 
 TEST_SOURCE = wdmd_client.c
 
-CFLAGS += -D_GNU_SOURCE -g \
+CFLAGS += -D_GNU_SOURCE -g -O2 \
 	-Wall \
 	-Wformat \
 	-Wformat-security \
@@ -41,6 +41,9 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option \
 	-fPIE -DPIE
+
+VER=$(shell cat ../VERSION)
+CFLAGS += -DVERSION=\"$(VER)\"
 
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 CMD_LDADD += -lwdmd -lrt

@@ -1,37 +1,44 @@
 Source: sanlock
 Section: libs
-Standards-Version: 3.9.3
+Standards-Version: 3.9.5
 Priority: optional
 Homepage: https://fedorahosted.org/sanlock/
 Maintainer: David Weber <wb@munzinger.de>
-Build-Depends: libaio-dev,
- libblkid1,
- libblkid-dev,
- debhelper (>= 8),
+Build-Depends: debhelper (>= 8), libaio-dev, libblkid-dev, libblkid1, python-dev
 
 Package: sanlock
-Depends: ${shlibs:Depends}, ${misc:Depends}, adduser
+Depends: adduser, ${misc:Depends}, ${shlibs:Depends}
 Architecture: any
+Section: admin
 Description: shared storage lock manager
- Sanlock ensures that single disk cannot be used by more than 
+ Sanlock ensures that single disk cannot be used by more than
  one running VM at a time, across any host in a network.
  This package contains the binaries and private shared libraries
 
 Package: libsanlock-client1
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}
 Architecture: any
 Description: shared storage lock manager (client library)
- Sanlock ensures that single disk cannot be used by more than 
+ Sanlock ensures that single disk cannot be used by more than
  one running VM at a time, across any host in a network.
  This package contains the pulbic shared library for libvirt
 
+Package: sanlock-python
+Depends: ${misc:Depends}, ${shlibs:Depends}, python-support (>= 0.90)
+Architecture: any
+Section: python
+Description: shared storage lock manager (python library)
+ Sanlock ensures that single disk cannot be used by more than
+ one running VM at a time, across any host in a network.
+ This package contains the python library to control sanlock
 
 Package: libsanlock-dev
-Depends: ${misc:Depends}, libsanlock-client1 (= ${binary:Version}), sanlock (= ${binary:Version})
+Depends: libsanlock-client1 (= ${binary:Version}),
+         sanlock (= ${binary:Version}),
+         ${misc:Depends}
 Architecture: any
 Section: libdevel
 Description: shared storage lock manager (development files)
- Sanlock ensures that single disk cannot be used by more than 
+ Sanlock ensures that single disk cannot be used by more than
  one running VM at a time, across any host in a network.
  This package contains the header files and static libraries.
-

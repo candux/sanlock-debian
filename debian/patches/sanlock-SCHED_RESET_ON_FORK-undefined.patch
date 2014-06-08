@@ -1,12 +1,10 @@
-Is needed to compile on some systems
-
-diff --git a/src/main.c b/src/main.c
-index 82c39af..898e2a8 100644
---- a/src/main.c
+Index: src/main.c
+===================================================================
+--- a/src/main.c.orig
 +++ b/src/main.c
-@@ -52,6 +52,10 @@
+@@ -56,6 +56,10 @@
  
- #define RELEASE_VERSION "2.2"
+ #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
  
 +#ifndef SCHED_RESET_ON_FORK
 +#define SCHED_RESET_ON_FORK 0
@@ -15,18 +13,19 @@ index 82c39af..898e2a8 100644
  struct thread_pool {
  	int num_workers;
  	int max_workers;
-diff --git a/wdmd/main.c b/wdmd/main.c
-index bd95f9d..0623b7c 100644
---- a/wdmd/main.c
+Index: wdmd/main.c
+===================================================================
+--- a/wdmd/main.c.orig
 +++ b/wdmd/main.c
-@@ -43,6 +43,10 @@
- 
- #define RELEASE_VERSION "2.2"
+@@ -41,6 +41,10 @@
+ #define GNUC_UNUSED __attribute__((__unused__))
+ #endif
  
 +#ifndef SCHED_RESET_ON_FORK
 +#define SCHED_RESET_ON_FORK 0
 +#endif
 +
  #define DEFAULT_TEST_INTERVAL 10
+ #define RECOVER_TEST_INTERVAL 1
  #define DEFAULT_FIRE_TIMEOUT 60
- #define DEFAULT_HIGH_PRIORITY 1
+

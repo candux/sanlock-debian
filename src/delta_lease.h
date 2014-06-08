@@ -10,6 +10,7 @@
 #define __DELTA_LEASE_H__
 
 int delta_lease_leader_read(struct task *task,
+			    int io_timeout,
 			    struct sync_disk *disk,
 			    char *space_name,
 			    uint64_t host_id,
@@ -42,8 +43,16 @@ int delta_lease_release(struct task *task,
                         struct leader_record *leader_ret);
 
 int delta_lease_init(struct task *task,
+		     int io_timeout,
 		     struct sync_disk *disk,
 		     char *space_name,
 		     int max_hosts);
+
+int delta_read_lockspace(struct task *task,
+			struct sync_disk *disk,
+			uint64_t host_id,
+			struct sanlk_lockspace *ls,
+			int io_timeout,
+			int *io_timeout_ret);
 
 #endif

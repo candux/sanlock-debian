@@ -1,8 +1,11 @@
+[Unit]
 Description=Shared Storage Lease Manager
-After=syslog.target wdmd.service
+After=syslog.target
+Wants=wdmd.service
 
 [Service]
 Type=forking
+ControlGroup=cpu:/
 ExecStart=/lib/systemd/systemd-sanlock start
 ExecStop=/lib/systemd/systemd-sanlock stop
 

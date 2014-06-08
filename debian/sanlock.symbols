@@ -1,4 +1,9 @@
 libsanlock.so.1 sanlock #MINVER#
+ calc_host_dead_seconds@Base 3.0
+ calc_id_renewal_fail_seconds@Base 3.0
+ calc_id_renewal_seconds@Base 3.0
+ calc_id_renewal_warn_seconds@Base 3.0
+ calc_request_finish_seconds@Base 3.0
  check_mode_block@Base 2.1
  client@Base 2.1
  close_disks@Base 2.1
@@ -10,23 +15,33 @@ libsanlock.so.1 sanlock #MINVER#
  delta_lease_leader_read@Base 2.1
  delta_lease_release@Base 2.1
  delta_lease_renew@Base 2.1
+ delta_read_lockspace@Base 3.0
  direct_acquire@Base 2.1
  direct_acquire_id@Base 2.1
  direct_align@Base 2.1
  direct_dump@Base 2.1
- direct_init@Base 2.1
- direct_live_id@Base 2.1
- direct_read_id@Base 2.1
+ direct_next_free@Base 3.0
  direct_read_leader@Base 2.1
  direct_release@Base 2.1
  direct_release_id@Base 2.1
  direct_renew_id@Base 2.1
+ direct_write_lockspace@Base 3.0
+ direct_write_resource@Base 3.0
  external_shutdown@Base 2.1
  get_rand@Base 2.1
+ helper_ci@Base 3.0
+ helper_full_count@Base 3.0
+ helper_kill_fd@Base 3.0
+ helper_last_status@Base 3.0
+ helper_pid@Base 3.0
+ helper_status_fd@Base 3.0
  host_info@Base 2.1
+ kill_count_max@Base 3.0
+ kill_grace_seconds@Base 3.0
  leader_checksum@Base 2.1
  lockspace_disk@Base 2.1
  log_level@Base 2.1
+ log_timeouts@Base 3.0
  main_task@Base 2.1
  majority_disks@Base 2.1
  monotime@Base 2.1
@@ -34,40 +49,58 @@ libsanlock.so.1 sanlock #MINVER#
  open_disks@Base 2.1
  open_disks_fd@Base 2.1
  our_host_name_global@Base 2.1
+ paxos_erase_dblock@Base 3.1.0
  paxos_lease_acquire@Base 2.1
  paxos_lease_init@Base 2.1
  paxos_lease_leader_read@Base 2.1
  paxos_lease_release@Base 2.1
  paxos_lease_request_read@Base 2.1
  paxos_lease_request_write@Base 2.1
+ paxos_read_buf@Base 3.0
+ paxos_read_resource@Base 3.0
+ paxos_verify_leader@Base 3.0
  read_iobuf@Base 2.1
  read_iobuf_reap@Base 2.1
  read_sectors@Base 2.1
  sanlock_acquire@Base 2.1
  sanlock_add_lockspace@Base 2.1
+ sanlock_add_lockspace_timeout@Base 3.0
  sanlock_align@Base 2.1
  sanlock_args_to_state@Base 2.1
+ sanlock_convert@Base 3.1.0
  sanlock_direct_align@Base 2.1
  sanlock_direct_init@Base 2.1
- sanlock_direct_live_id@Base 2.1
- sanlock_direct_read_id@Base 2.1
+ sanlock_direct_write_lockspace@Base 3.0
+ sanlock_direct_write_resource@Base 3.0
  sanlock_examine@Base 2.1
+ sanlock_get_hosts@Base 3.0
+ sanlock_get_lockspaces@Base 3.0
+ sanlock_get_lvb@Base 3.0
  sanlock_init@Base 2.1
  sanlock_inq_lockspace@Base 2.1
  sanlock_inquire@Base 2.1
+ sanlock_killpath@Base 3.0
+ sanlock_path_export@Base 3.0
+ sanlock_path_import@Base 3.0
+ sanlock_read_lockspace@Base 3.0
+ sanlock_read_resource@Base 3.0
+ sanlock_read_resource_owners@Base 3.0
  sanlock_register@Base 2.1
  sanlock_release@Base 2.1
  sanlock_rem_lockspace@Base 2.1
  sanlock_request@Base 2.1
  sanlock_res_to_str@Base 2.1
  sanlock_restrict@Base 2.1
+ sanlock_set_lvb@Base 3.0
  sanlock_socket_address@Base 2.1
  sanlock_state_to_args@Base 2.1
  sanlock_str_to_lockspace@Base 2.1
  sanlock_str_to_res@Base 2.1
+ sanlock_test_resource_owners@Base 3.0
+ sanlock_write_lockspace@Base 3.0
+ sanlock_write_resource@Base 3.0
  send_command@Base 2.1
  setup_task_aio@Base 2.1
- setup_task_timeouts@Base 2.1
  spaces@Base 2.1
  spaces_add@Base 2.1
  spaces_mutex@Base 2.1

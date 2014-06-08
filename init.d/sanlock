@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # sanlock - SAN-based lock manager
 #
@@ -22,7 +22,8 @@
 . /etc/rc.d/init.d/functions
 
 prog="sanlock"
-lockfile="/var/run/$prog/$prog.pid"
+runfile="/var/run/$prog/$prog.pid"
+lockfile="/var/lock/subsys/$prog"
 exec="/usr/sbin/$prog"
 
 SANLOCKUSER="sanlock"
@@ -39,30 +40,44 @@ start() {
 	fi
 
 	echo -n $"Starting $prog: "
-	daemon --user=$SANLOCKUSER $prog daemon $SANLOCKOPTS
+	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
-	[ $retval -eq 0 ]
+	[ $retval -eq 0 ] && touch $lockfile
 	return $retval
 }
 
 stop() {
-	echo -n $"Stopping $prog: "
-	killproc -p $lockfile $prog -TERM
+	PID=$(pidofproc -p $runfile $prog)
+
+	echo -n $"Sending stop signal $prog ($PID): "
+	killproc -p $runfile $prog -TERM
 	retval=$?
 	echo
-	[ $retval -eq 0 ]
-}
 
-wait_for_stop() {
-	while [ -e $lockfile ]; do
-		sleep .5
+	if [ $retval -ne 0 ]; then
+		return $retval
+	fi
+
+	echo -n $"Waiting for $prog ($PID) to stop:"
+
+	timeout=10
+	while checkpid $PID; do
+		sleep 1
+		timeout=$((timeout - 1))
+		if [ "$timeout" -le 0 ]; then
+			failure; echo
+			return 1
+		fi
 	done
+
+	success; echo
+	rm -f $lockfile
+	return $retval
 }
 
 restart() {
-	stop
-	wait_for_stop
+	rh_status_q && stop
 	start
 }
 
@@ -109,4 +124,3 @@ case "$1" in
 		exit 2
 esac
 exit $?
-

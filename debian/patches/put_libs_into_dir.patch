@@ -1,10 +1,8 @@
-put the private shared libraries into /usr/lib/sanlock
-
-diff --git a/src/Makefile b/src/Makefile
-index d101f30..92d5d9f 100644
---- a/src/Makefile
-+++ b/src/Makefile
-@@ -8,6 +8,8 @@ CMD_TARGET = sanlock
+Index: sanlock-3.0.0/src/Makefile
+===================================================================
+--- sanlock-3.0.0.orig/src/Makefile	2013-07-30 20:32:31.000000000 +0200
++++ sanlock-3.0.0/src/Makefile	2013-07-30 20:39:20.000000000 +0200
+@@ -8,6 +8,8 @@
  HEADER_TARGET = sanlock.h sanlock_rv.h sanlock_resource.h sanlock_admin.h sanlock_direct.h
  MAN_TARGET = sanlock.8
  
@@ -13,7 +11,7 @@ index d101f30..92d5d9f 100644
  SOMAJOR=1
  SOMINOR=0
  
-@@ -72,7 +74,7 @@ CFLAGS += -D_GNU_SOURCE -g \
+@@ -87,7 +89,7 @@
  
  CMD_CFLAGS = $(CFLAGS) -fPIE -DPIE
  
@@ -22,7 +20,7 @@ index d101f30..92d5d9f 100644
  CMD_LDADD += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
  
  LIB_ENTIRE_LDFLAGS += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
-@@ -112,14 +114,15 @@ MANDIR=/usr/share/man
+@@ -126,14 +128,15 @@
  install: all
  	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
  	$(INSTALL) -d $(DESTDIR)/$(LIBDIR)
@@ -41,11 +39,11 @@ index d101f30..92d5d9f 100644
  	cp -a $(LIB_CLIENT_TARGET).so.$(SOMAJOR) $(DESTDIR)/$(LIBDIR)
  	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADIR)
  	$(INSTALL) -m 644 $(MAN_TARGET) $(DESTDIR)/$(MANDIR)/man8/
-diff --git a/wdmd/Makefile b/wdmd/Makefile
-index 205245b..4db2dc1 100644
---- a/wdmd/Makefile
-+++ b/wdmd/Makefile
-@@ -10,6 +10,8 @@ HEADER_TARGET = wdmd.h
+Index: sanlock-3.0.0/wdmd/Makefile
+===================================================================
+--- sanlock-3.0.0.orig/wdmd/Makefile	2013-07-30 20:32:31.000000000 +0200
++++ sanlock-3.0.0/wdmd/Makefile	2013-07-30 20:39:20.000000000 +0200
+@@ -10,6 +10,8 @@
  MAN_TARGET = wdmd.8
  TEST_TARGET = wdmd_client
  
@@ -54,16 +52,16 @@ index 205245b..4db2dc1 100644
  SOMAJOR=1
  SOMINOR=0
  SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
-@@ -42,7 +44,7 @@ CFLAGS += -D_GNU_SOURCE -g \
- 	-fdiagnostics-show-option \
- 	-fPIE -DPIE
+@@ -45,7 +47,7 @@
+ VER=$(shell cat ../VERSION)
+ CFLAGS += -DVERSION=\"$(VER)\"
  
 -CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 +CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie -Wl,-rpath=/usr/lib/sanlock
  CMD_LDADD += -lwdmd -lrt
  
  LIB_LDFLAGS += -Wl,-z,relro -pie
-@@ -79,11 +81,12 @@ MANDIR=/usr/share/man
+@@ -82,11 +84,12 @@
  install: all
  	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
  	$(INSTALL) -d $(DESTDIR)/$(LIBDIR)

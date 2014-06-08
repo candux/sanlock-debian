@@ -227,17 +227,20 @@ group id
 .BI -t " num"
 max worker threads
 
+.BI -g " sec"
+seconds for graceful recovery
+
 .BR -w " 0|1"
 use watchdog through wdmd
 
 .BR -h " 0|1"
-use high priority features (realtime scheduling, mlockall)
+use high priority (RR) scheduling
+
+.BR -l " num"
+use mlockall (0 none, 1 current, 2 current and future)
 
 .BR \-a " 0|1"
 use async i/o
-
-.BI -o " sec"
-io timeout in seconds
 
 .B "sanlock client"
 .I action
@@ -245,15 +248,21 @@ io timeout in seconds
 
 .B sanlock client status
 
-Print processes, lockspaces, and resources being manged by the sanlock
+Print processes, lockspaces, and resources being managed by the sanlock
 daemon.  Add -D to show extra internal daemon status for debugging.
 Add -o p to show resources by pid, or -o s to show resources by lockspace.
 
-.BR "sanlock client host_status -s" " LOCKSPACE"
+.B sanlock client host_status
 
 Print state of host_id delta leases read during the last renewal.
-Only lockspace_name is used from the LOCKSPACE argument.
+State of all lockspaces is shown (use -s to select one).
 Add -D to show extra internal daemon status for debugging.
+
+.B sanlock client gets
+
+Print lockspaces being managed by the sanlock daemon.  The LOCKSPACE
+string will be followed by ADD or REM if the lockspace is currently being
+added or removed.  Add -h 1 to also show hosts in each lockspace.
 
 .B sanlock client log_dump
 
@@ -267,11 +276,28 @@ command will be ignored if any lockspaces exist.  With the force option
 released, and lockspaces removed.
 
 .BR "sanlock client init -s" " LOCKSPACE"
-.br
+
+Tell the sanlock daemon to initialize a lockspace on disk.  The -o option
+can be used to specify the io timeout to be written in the host_id leases.
+(Also see sanlock direct init.)
+
 .BR "sanlock client init -r" " RESOURCE"
 
-Tell the sanlock daemon to initialize storage for lease areas.
-(See sanlock direct init.)
+Tell the sanlock daemon to initialize a resource lease on disk.
+(Also see sanlock direct init.)
+
+.BR "sanlock client read -s" " LOCKSPACE"
+
+Tell the sanlock daemon to read a lockspace from disk.  Only the
+LOCKSPACE path and offset are required.  If host_id is zero, the first
+record at offset (host_id 1) is used.  The complete LOCKSPACE and io
+timeout are printed.
+
+.BR "sanlock client read -r" " RESOURCE"
+
+Tell the sanlock daemon to read a resource lease from disk.  Only the
+RESOURCE path and offset are required.  The complete RESOURCE is printed.
+(Also see sanlock direct read_leader.)
 
 .BR "sanlock client align -s" " LOCKSPACE"
 
@@ -281,11 +307,14 @@ path.  Only path is used from the LOCKSPACE argument.
 .BR "sanlock client add_lockspace -s" " LOCKSPACE"
 
 Tell the sanlock daemon to acquire the specified host_id in the lockspace.
-This will allow resources to be acquired in the lockspace.
+This will allow resources to be acquired in the lockspace.  The -o option
+can be used to specify the io timeout of the acquiring host, and will be
+written in the host_id lease.
 
 .BR "sanlock client inq_lockspace -s" " LOCKSPACE"
 
-Ask to the sanlock daemon weather the lockspace is acquired or not.
+Inquire about the state of the lockspace in the sanlock daemon, whether
+it is being added or removed, or is joined.
 
 .BR "sanlock client rem_lockspace -s" " LOCKSPACE"
 
@@ -310,6 +339,15 @@ Tell the sanlock daemon to acquire or release the specified resource lease
 for the given pid.  The pid must be registered with the sanlock daemon.
 acquire can optionally take a versioned RESOURCE string RESOURCE:lver,
 where lver is the version of the lease that must be acquired, or fail.
+
+.BR "sanlock client convert -r" " RESOURCE " \
+\fB-p\fP " " \fIpid\fP
+
+Tell the sanlock daemon to convert the mode of the specified resource
+lease for the given pid.  If the existing mode is exclusive (default),
+the mode of the lease can be converted to shared with RESOURCE:SH.  If the
+existing mode is shared, the mode of the lease can be converted to
+exclusive with RESOURCE (no :SH suffix).
 
 .BI "sanlock client inquire -p" " pid"
 
@@ -353,7 +391,8 @@ lockspace, or initialize storage for one resource (paxos) lease.  Both
 options require 1MB of space.  The host_id in the LOCKSPACE string is not
 relevant to initialization, so the value is ignored.  (The default of 2000
 host_ids can be changed for special cases using the -n num_hosts and -m
-max_hosts options.)
+max_hosts options.)  With -s, the -o option specifies the io timeout to be
+written in the host_id leases.
 
 .BR "sanlock direct read_leader -s" " LOCKSPACE"
 .br
@@ -361,16 +400,6 @@ max_hosts options.)
 
 Read a leader record from disk and print the fields.  The leader record is
 the single sector of a delta lease, or the first sector of a paxos lease.
-
-.BR "sanlock direct read_id -s" " LOCKSPACE"
-.br
-.BR "sanlock direct live_id -s" " LOCKSPACE"
-
-read_id reads a host_id and prints the owner.  live_id reads a host_id
-once a second until it the timestamp or owner change (prints live 1), or
-until host_dead_seconds (prints live 0).  (host_dead_seconds is derived
-from the io_timeout option.  The live 0|1 conclusion will not match the
-sanlock daemon's conclusion unless the configured timeouts match.)
 ./" .P
 ./" .BR "sanlock direct acquire_id -s" " LOCKSPACE"
 ./" .br
@@ -427,11 +456,15 @@ RESOURCE option string
 .IR offset " offset on path (bytes)"
 
 .SS
-RESOURCE option string with version
+RESOURCE option string with suffix
 
 .BR \-r " " \fIlockspace_name\fP:\fIresource_name\fP:\fIpath\fP:\fIoffset\fP:\fIlver\fP
 .P
-.IR lver " leader version or SH for shared lease"
+.IR lver " leader version"
+
+.BR \-r " " \fIlockspace_name\fP:\fIresource_name\fP:\fIpath\fP:\fIoffset\fP:SH
+.P
+SH indicates shared mode
 
 .SS Defaults
 
@@ -486,9 +519,39 @@ set in A's bitmap for request_finish_seconds.)
 \fIforce_mode\fP determines the action the resource lease owner should
 take:
 
-\fB1\fP (KILL_PID): kill the process holding the resource lease.  When the
+\fB1\fP (FORCE): kill the process holding the resource lease.  When the
 process has exited, the resource lease will be released, and can then be
-acquired by anyone.
+acquired by anyone.  The kill signal is SIGKILL (or SIGTERM if SIGKILL
+is restricted.)
+
+\fB2\fP (GRACEFUL): run the program configured by sanlock_killpath
+against the process holding the resource lease.  If no killpath is
+defined, then FORCE is used.
+
+.SS Graceful recovery
+
+When a lockspace host_id cannot be renewed for a specific period of time,
+sanlock enters a recovery mode in which it attempts to forcibly release
+any resource leases in that lockspace.  If all the leases are not released
+within 60 seconds, the watchdog will fire, resetting the host.
+
+The most immediate way of releasing the resource leases in the failed
+lockspace is by sending SIGKILL to all pids holding the leases, and
+automatically releasing the resource leases as the pids exit.  After all
+pids have exited, no resource leases are held in the lockspace, the
+watchdog expiration is removed, and the host can avoid the watchdog reset.
+
+A slightly more graceful approach is to send SIGTERM to a pid before
+escalating to SIGKILL.  sanlock does this by sending SIGTERM to each pid,
+once a second, for the first N seconds, before sending SIGKILL once a
+second for the remaining M seconds (N/M can be tuned with the -g daemon
+option.)
+
+An even more graceful approach is to configure a program for sanlock to
+run that will terminate or suspend each pid, and explicitly release the
+leases it held.  sanlock will run this program for each pid.  It has N
+seconds to terminate the pid or explicitly release its leases before
+sanlock escalates to SIGKILL for the remaining M seconds.
 
 .SH SEE ALSO
 .BR wdmd (8)
